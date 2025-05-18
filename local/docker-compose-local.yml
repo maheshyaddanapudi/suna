@@ -1,0 +1,136 @@
+version: "3.8"
+services:
+  # Database - Supabase
+  supabase-db:
+    image: supabase/postgres:14.1.0
+    ports:
+      - "54322:5432"
+    volumes:
+      - supabase-db-data:/var/lib/postgresql/data
+      - ./suna/backend/supabase/migrations:/docker-entrypoint-initdb.d
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - suna-network
+
+  # Supabase API
+  supabase:
+    image: supabase/supabase-rest:latest
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "54321:8000"
+    environment:
+      - PGRST_DB_URI=postgres://postgres:postgres@supabase-db:5432/postgres
+      - PGRST_DB_SCHEMA=public
+      - PGRST_DB_ANON_ROLE=anon
+      - PGRST_JWT_SECRET=super-secret-jwt-token-with-at-least-32-characters
+    networks:
+      - suna-network
+
+  # Redis for caching and message queue
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - suna-network
+
+  # RabbitMQ for message queue
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - suna-network
+
+  # Backend API service
+  backend:
+    build:
+      context: ./suna/backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./suna/backend:/app
+      - ./logs/backend:/app/logs
+    environment:
+      - ENV_MODE=local
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_SSL=False
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - SUPABASE_URL=http://supabase:8000
+      - SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      - DAYTONA_SERVER_URL=http://host.docker.internal:3986/api
+      - DAYTONA_TARGET=local
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      supabase:
+        condition: service_started
+    networks:
+      - suna-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Frontend service
+  frontend:
+    build:
+      context: ./suna/frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./suna/frontend:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+    command: ["npm", "run", "dev"]
+    depends_on:
+      - backend
+    networks:
+      - suna-network
+
+networks:
+  suna-network:
+    driver: bridge
+
+volumes:
+  supabase-db-data:
+  redis-data:
+  rabbitmq_data:
