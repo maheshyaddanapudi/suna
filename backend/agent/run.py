@@ -609,7 +609,9 @@ async def run_agent(
 
 if __name__ == "__main__":
     import asyncio
+
     # Configure any environment variables or setup needed for testing
     load_dotenv()  # Ensure environment variables are loaded
+
     # Run the test function
     asyncio.run(test_agent())
